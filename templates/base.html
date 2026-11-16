@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · Secure Budget</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #f4f6f8; margin: 0; }
+    main { max-width: 360px; margin: 80px auto; background: #fff; padding: 32px;
+           border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    h1 { font-size: 1.4rem; margin-top: 0; }
+    label { display: block; margin: 12px 0 4px; font-size: .9rem; }
+    input { width: 100%; padding: 10px; box-sizing: border-box;
+            border: 1px solid #ccd; border-radius: 6px; }
+    button { width: 100%; margin-top: 20px; padding: 10px; border: 0; border-radius: 6px;
+             background: #1f6feb; color: #fff; font-size: 1rem; cursor: pointer; }
+    .flash { background: #fff4e5; border: 1px solid #f0c36d; padding: 8px 12px;
+             border-radius: 6px; margin-bottom: 12px; font-size: .9rem; }
+    p.switch { text-align: center; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <main>
+    {% for message in get_flashed_messages() %}
+      <div class="flash">{{ message }}</div>
+    {% endfor %}
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+  <h1>{{ title }}</h1>
+  <form method="post">
+    <label for="username">Username</label>
+    <input id="username" name="username" required autocomplete="username">
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" required
+           autocomplete="{{ 'new-password' if other == 'login' else 'current-password' }}">
+    <button type="submit">{{ title }}</button>
+  </form>
+  {% if other == "login" %}
+    <p class="switch">Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
+  {% else %}
+    <p class="switch">New here? <a href="{{ url_for('register') }}">Create an account</a></p>
+  {% endif %}
+{% endblock %}
