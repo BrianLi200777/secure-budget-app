@@ -36,6 +36,7 @@
   {% endif %}
 
   <form method="post" action="{{ url_for('set_budget') }}" class="inline">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <select name="category" aria-label="Category">
       {% for category in budget_categories %}
         <option value="{{ category }}">{{ category|category_label }}</option>
@@ -62,6 +63,7 @@
   <h2>Transactions</h2>
   <button id="connect-bank" type="button">Connect a bank</button>
   <form method="post" action="{{ url_for('refresh_transactions') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="secondary">Refresh transactions</button>
   </form>
 
@@ -89,29 +91,11 @@
   {% endif %}
 
   <form method="post" action="{{ url_for('logout') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <button type="submit" class="secondary">Log out</button>
   </form>
 </div>
 
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
-<script>
-  document.getElementById("connect-bank").addEventListener("click", async () => {
-    const res = await fetch("{{ url_for('create_link_token') }}", { method: "POST" });
-    const data = await res.json();
-    if (!res.ok) { alert(data.error); return; }
-
-    Plaid.create({
-      token: data.link_token,
-      onSuccess: async (public_token) => {
-        const exchange = await fetch("{{ url_for('exchange_public_token') }}", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ public_token }),
-        });
-        if (!exchange.ok) { alert((await exchange.json()).error); return; }
-        window.location.reload();
-      },
-    }).open();
-  });
-</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
 {% endblock %}

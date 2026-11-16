@@ -11,6 +11,9 @@ from argon2.exceptions import VerifyMismatchError
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 from flask import Flask, flash, g, jsonify, redirect, render_template, request, session, url_for
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from flask_wtf.csrf import CSRFError, CSRFProtect
 from plaid.api import plaid_api
 from plaid.model.country_code import CountryCode
 from plaid.model.item_public_token_exchange_request import ItemPublicTokenExchangeRequest
@@ -26,6 +29,33 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.environ["FLASK_SECRET_KEY"]
 # Browser won't send the cookie on most cross-site requests.
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+# JavaScript can't read the login cookie, so an injected script can't steal it.
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+# Set APP_ENV=production once the app is online with HTTPS.
+PRODUCTION = os.environ.get("APP_ENV") == "production"
+# Only send the login cookie over HTTPS. Off locally, where there's no HTTPS.
+app.config["SESSION_COOKIE_SECURE"] = PRODUCTION
+
+# Every form and POST request must carry a secret token that only our own pages have,
+# so other websites can't submit requests as a logged-in user (CSRF).
+csrf = CSRFProtect(app)
+# Counts requests per IP address to slow down password guessing.
+limiter = Limiter(get_remote_address, app=app, storage_uri="memory://")
+
+# Tells the browser what this page may load. Scripts only from us and Plaid, and
+# no inline scripts, so injected <script> tags won't run. Inline styles are allowed
+# because the progress bars set their width with style="...".
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self' https://cdn.plaid.com",
+    "frame-src https://cdn.plaid.com",
+    "connect-src 'self' https://sandbox.plaid.com https://production.plaid.com",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
 
 DATABASE = "budget.db"
 password_hasher = PasswordHasher()
@@ -74,6 +104,39 @@ def money(amount):
 @app.template_filter("category_label")
 def category_label(category):
     return (category or "OTHER").replace("_", " ").title()
+
+
+@app.after_request
+def set_security_headers(response):
+    response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+    # Don't let the browser guess file types (stops some file-upload tricks).
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    # Older browsers' version of frame-ancestors: no embedding this site (clickjacking).
+    response.headers["X-Frame-Options"] = "DENY"
+    # Don't leak full page URLs to other sites.
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # Financial data shouldn't be saved in the browser's cache.
+    response.headers["Cache-Control"] = "no-store"
+    if PRODUCTION:
+        # Browser must always use HTTPS for this site from now on.
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.errorhandler(CSRFError)
+def csrf_failed(error):
+    if request.path.startswith("/plaid/"):
+        return jsonify(error="Security check failed. Refresh the page and try again."), 400
+    flash("Security check failed. Please try again.")
+    return redirect(url_for("home"))
+
+
+@app.errorhandler(429)
+def too_many_requests(error):
+    flash("Too many attempts. Please wait a minute and try again.")
+    if request.endpoint == "register":
+        return render_template("auth.html", title="Create account", other="login"), 429
+    return render_template("auth.html", title="Log in", other="register"), 429
 
 
 def get_db():
@@ -378,6 +441,7 @@ def sync_transactions(user_id):
 
 
 @app.route("/register", methods=["GET", "POST"])
+@limiter.limit("10 per hour", methods=["POST"])
 def register():
     if request.method == "POST":
         username = request.form.get("username", "").strip().lower()
@@ -405,6 +469,7 @@ def register():
 
 
 @app.route("/login", methods=["GET", "POST"])
+@limiter.limit("5 per minute", methods=["POST"])
 def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip().lower()
