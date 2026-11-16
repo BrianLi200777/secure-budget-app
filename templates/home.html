@@ -1,7 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
+<div class="dashboard">
   <h1>Welcome, {{ username }}</h1>
 
+  <div class="stats">
+    <div class="stat">
+      <span>Spent this month</span>
+      <strong>{{ total_spent|money }}</strong>
+    </div>
+    <div class="stat">
+      <span>Money in this month</span>
+      <strong class="in">+{{ money_in|money }}</strong>
+    </div>
+  </div>
+
+  <h2>Budgets this month</h2>
+  {% if budget_rows %}
+    {% for row in budget_rows %}
+      <div class="budget">
+        <div class="budget-line">
+          <span>{{ row.category|category_label }}</span>
+          <span>
+            {{ row.spent|money }}{% if row.limit %} of {{ row.limit|money }}{% endif %}
+            {% if row.status == "over" %}<em class="over">Over budget</em>
+            {% elif row.status == "near" %}<em class="near">Close to limit</em>{% endif %}
+          </span>
+        </div>
+        {% if row.limit %}
+          <div class="bar"><div class="fill {{ row.status }}" style="width: {{ [row.percent, 100]|min }}%"></div></div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  {% else %}
+    <p>No spending yet this month.</p>
+  {% endif %}
+
+  <form method="post" action="{{ url_for('set_budget') }}" class="inline">
+    <select name="category" aria-label="Category">
+      {% for category in budget_categories %}
+        <option value="{{ category }}">{{ category|category_label }}</option>
+      {% endfor %}
+    </select>
+    <input name="limit" inputmode="decimal" placeholder="Monthly limit, e.g. 200" aria-label="Monthly limit">
+    <button type="submit">Set budget</button>
+  </form>
+  <p class="hint">To remove a budget, pick the category and leave the limit blank.</p>
+
+  {% if chart %}
+    <h2>Spending by month</h2>
+    <div class="chart">
+      {% for month in chart %}
+        <div class="column">
+          <span class="amount">{{ month.spent|money }}</span>
+          <div class="column-bar" style="height: {{ month.height }}%"></div>
+          <span class="label">{{ month.label }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  <h2>Transactions</h2>
   <button id="connect-bank" type="button">Connect a bank</button>
   <form method="post" action="{{ url_for('refresh_transactions') }}">
     <button type="submit" class="secondary">Refresh transactions</button>
@@ -15,8 +73,13 @@
           <tr>
             <td>{{ t.date }}</td>
             <td>{{ t.name }}</td>
-            <td>{{ (t.category or "Other").replace("_", " ").title() }}</td>
-            <td class="num">${{ "%.2f"|format(t.amount) }}</td>
+            <td>{{ t.category|category_label }}</td>
+            {# Plaid uses positive for money out, negative for money in. #}
+            {% if t.amount < 0 %}
+              <td class="num in">+{{ t.amount|money }}</td>
+            {% else %}
+              <td class="num">{{ t.amount|money }}</td>
+            {% endif %}
           </tr>
         {% endfor %}
       </tbody>
@@ -28,26 +91,27 @@
   <form method="post" action="{{ url_for('logout') }}">
     <button type="submit" class="secondary">Log out</button>
   </form>
+</div>
 
-  <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
-  <script>
-    document.getElementById("connect-bank").addEventListener("click", async () => {
-      const res = await fetch("{{ url_for('create_link_token') }}", { method: "POST" });
-      const data = await res.json();
-      if (!res.ok) { alert(data.error); return; }
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script>
+  document.getElementById("connect-bank").addEventListener("click", async () => {
+    const res = await fetch("{{ url_for('create_link_token') }}", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) { alert(data.error); return; }
 
-      Plaid.create({
-        token: data.link_token,
-        onSuccess: async (public_token) => {
-          const exchange = await fetch("{{ url_for('exchange_public_token') }}", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ public_token }),
-          });
-          if (!exchange.ok) { alert((await exchange.json()).error); return; }
-          window.location.reload();
-        },
-      }).open();
-    });
-  </script>
+    Plaid.create({
+      token: data.link_token,
+      onSuccess: async (public_token) => {
+        const exchange = await fetch("{{ url_for('exchange_public_token') }}", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ public_token }),
+        });
+        if (!exchange.ok) { alert((await exchange.json()).error); return; }
+        window.location.reload();
+      },
+    }).open();
+  });
+</script>
 {% endblock %}

@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import time
+from datetime import date, datetime
 from functools import wraps
 
 import plaid
@@ -44,6 +45,35 @@ plaid_client = plaid_api.PlaidApi(
 )
 # Plaid rejected the request, or we couldn't reach Plaid at all.
 PLAID_ERRORS = (plaid.ApiException, urllib3.exceptions.HTTPError)
+
+# Money moving between your own accounts isn't spending. A credit card payment would
+# double-count purchases already made on the card.
+NOT_SPENDING = ("INCOME", "TRANSFER_IN", "TRANSFER_OUT", "LOAN_PAYMENTS")
+BUDGET_CATEGORIES = (
+    "BANK_FEES",
+    "ENTERTAINMENT",
+    "FOOD_AND_DRINK",
+    "GENERAL_MERCHANDISE",
+    "GENERAL_SERVICES",
+    "GOVERNMENT_AND_NON_PROFIT",
+    "HOME_IMPROVEMENT",
+    "MEDICAL",
+    "PERSONAL_CARE",
+    "RENT_AND_UTILITIES",
+    "TRANSPORTATION",
+    "TRAVEL",
+    "OTHER",
+)
+
+
+@app.template_filter("money")
+def money(amount):
+    return f"${abs(amount):,.2f}"
+
+
+@app.template_filter("category_label")
+def category_label(category):
+    return (category or "OTHER").replace("_", " ").title()
 
 
 def get_db():
@@ -89,6 +119,14 @@ def init_db():
                 category TEXT
             )"""
         )
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS budgets (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                category TEXT NOT NULL,
+                monthly_limit REAL NOT NULL,
+                PRIMARY KEY (user_id, category)
+            )"""
+        )
 
 
 def login_required(view):
@@ -108,14 +146,123 @@ def home():
     user = db.execute(
         "SELECT username FROM users WHERE id = ?", (session["user_id"],)
     ).fetchone()
+    user_id = session["user_id"]
     transactions = db.execute(
         "SELECT date, name, amount, category FROM transactions WHERE user_id = ? "
         "ORDER BY date DESC",
-        (session["user_id"],),
+        (user_id,),
     ).fetchall()
+
+    month_start = date.today().replace(day=1).isoformat()
+    # "Spent" counts purchases only (amount > 0). Refunds count under "money in" instead,
+    # so they're never counted twice.
+    # One "?" per excluded category, so the values still go in as safe parameters.
+    not_spending = ",".join("?" * len(NOT_SPENDING))
+    spent_by_category = {
+        row[0]: row[1]
+        for row in db.execute(
+            "SELECT COALESCE(category, 'OTHER'), SUM(amount) FROM transactions "
+            f"WHERE user_id = ? AND date >= ? AND amount > 0 AND COALESCE(category, 'OTHER') NOT IN ({not_spending}) "
+            "GROUP BY 1",
+            (user_id, month_start, *NOT_SPENDING),
+        )
+    }
+    money_in = db.execute(
+        "SELECT COALESCE(SUM(-amount), 0) FROM transactions "
+        "WHERE user_id = ? AND date >= ? AND amount < 0",
+        (user_id, month_start),
+    ).fetchone()[0]
+    budgets = {
+        row["category"]: row["monthly_limit"]
+        for row in db.execute(
+            "SELECT category, monthly_limit FROM budgets WHERE user_id = ?", (user_id,)
+        )
+    }
+
+    budget_rows = []
+    for category in set(spent_by_category) | set(budgets):
+        spent = spent_by_category.get(category, 0)
+        limit = budgets.get(category)
+        percent = spent / limit * 100 if limit else None
+        if percent is None:
+            status = None
+        elif percent >= 100:
+            status = "over"
+        elif percent >= 80:
+            status = "near"
+        else:
+            status = "ok"
+        budget_rows.append(
+            {"category": category, "spent": spent, "limit": limit,
+             "percent": percent, "status": status}
+        )
+    budget_rows.sort(key=lambda row: row["spent"], reverse=True)
+
+    monthly = db.execute(
+        "SELECT substr(date, 1, 7) AS month, SUM(amount) AS spent FROM transactions "
+        f"WHERE user_id = ? AND amount > 0 AND COALESCE(category, 'OTHER') NOT IN ({not_spending}) "
+        "GROUP BY month ORDER BY month DESC LIMIT 6",
+        (user_id, *NOT_SPENDING),
+    ).fetchall()
+    biggest_month = max((row["spent"] for row in monthly), default=0)
+    chart = [
+        {
+            "label": datetime.strptime(row["month"], "%Y-%m").strftime("%b"),
+            "spent": row["spent"],
+            "height": row["spent"] / biggest_month * 100,
+        }
+        for row in reversed(monthly)
+    ]
+
     return render_template(
-        "home.html", username=user["username"], transactions=transactions
+        "home.html",
+        title="Dashboard",
+        username=user["username"],
+        transactions=transactions,
+        total_spent=sum(row["spent"] for row in budget_rows),
+        money_in=money_in,
+        budget_rows=budget_rows,
+        chart=chart,
+        budget_categories=BUDGET_CATEGORIES,
     )
+
+
+@app.route("/budgets", methods=["POST"])
+@login_required
+def set_budget():
+    category = request.form.get("category", "")
+    limit_text = request.form.get("limit", "").strip()
+    if category not in BUDGET_CATEGORIES:
+        flash("Pick a category from the list.")
+        return redirect(url_for("home"))
+
+    db = get_db()
+    if limit_text in ("", "0"):
+        db.execute(
+            "DELETE FROM budgets WHERE user_id = ? AND category = ?",
+            (session["user_id"], category),
+        )
+        db.commit()
+        flash(f"Budget removed for {category_label(category)}.")
+        return redirect(url_for("home"))
+
+    try:
+        limit = round(float(limit_text), 2)
+    except ValueError:
+        limit = -1
+    # Also rejects "nan" and "inf", which float() would otherwise accept.
+    if not 0 < limit <= 1_000_000:
+        flash("Budget must be a number between 0 and 1,000,000.")
+        return redirect(url_for("home"))
+
+    db.execute(
+        "INSERT INTO budgets (user_id, category, monthly_limit) VALUES (?, ?, ?) "
+        "ON CONFLICT (user_id, category) DO UPDATE SET monthly_limit = excluded.monthly_limit",
+        (session["user_id"], category, limit),
+    )
+    db.commit()
+    flash(f"Budget set: {category_label(category)}, {money(limit)} a month.")
+    return redirect(url_for("home"))
 
 
 @app.route("/plaid/link_token", methods=["POST"])

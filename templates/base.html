@@ -17,7 +17,32 @@
     .flash { background: #fff4e5; border: 1px solid #f0c36d; padding: 8px 12px;
              border-radius: 6px; margin-bottom: 12px; font-size: .9rem; }
     p.switch { text-align: center; font-size: .9rem; }
-    main:has(table) { max-width: 760px; }
+    main:has(.dashboard) { max-width: 760px; margin-top: 40px; }
+    h2 { font-size: 1.1rem; margin: 32px 0 12px; }
+    .stats { display: flex; gap: 12px; }
+    .stat { flex: 1; background: #f4f6f8; border-radius: 8px; padding: 14px; }
+    .stat span { display: block; font-size: .85rem; color: #555; }
+    .stat strong { font-size: 1.4rem; }
+    .in { color: #1a7f37; }
+    .budget { margin-bottom: 14px; font-size: .9rem; }
+    .budget-line { display: flex; justify-content: space-between; margin-bottom: 4px; }
+    .budget em { font-style: normal; font-weight: 600; margin-left: 6px; }
+    .bar { height: 8px; background: #eaeef2; border-radius: 4px; overflow: hidden; }
+    .fill { height: 100%; background: #1a7f37; }
+    .fill.near { background: #bf8700; }
+    .fill.over { background: #cf222e; }
+    em.near { color: #bf8700; }
+    em.over { color: #cf222e; }
+    form.inline { display: flex; gap: 8px; margin-top: 16px; }
+    form.inline select, form.inline input { flex: 1; padding: 10px; border: 1px solid #ccd; border-radius: 6px; }
+    form.inline button { width: auto; margin-top: 0; padding: 10px 16px; }
+    .hint { font-size: .8rem; color: #666; margin-top: 6px; }
+    .chart { display: flex; align-items: flex-end; gap: 12px; height: 180px; }
+    .column { flex: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; font-size: .75rem; }
+    .column-bar { width: 100%; background: #1f6feb; border-radius: 4px 4px 0 0; min-height: 2px; }
+    .column .amount { margin-bottom: 4px; color: #555; }
+    .column .label { margin-top: 4px; }
+    @media (max-width: 600px) { form.inline, .stats { flex-direction: column; } }
     button.secondary { background: #fff; color: #1f6feb; border: 1px solid #1f6feb; margin-top: 10px; }
     table { width: 100%; border-collapse: collapse; margin-top: 24px; font-size: .9rem; }
     th, td { text-align: left; padding: 8px; border-bottom: 1px solid #eee; }
