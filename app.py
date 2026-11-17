@@ -110,7 +110,13 @@ def money(amount):
 
 @app.template_filter("category_label")
 def category_label(category):
-    return (category or "OTHER").replace("_", " ").title()
+    return (category or "OTHER").replace("_", " ").capitalize()
+
+
+@app.template_filter("short_date")
+def short_date(iso_date):
+    day = datetime.strptime(iso_date, "%Y-%m-%d")
+    return f"{day:%b} {day.day}"
 
 
 @app.after_request
@@ -304,9 +310,16 @@ def home():
         for row in reversed(monthly)
     ]
 
+    budgeted = [row for row in budget_rows if row["limit"]]
+    budget_total = sum(row["limit"] for row in budgeted)
+    budget_left = budget_total - sum(row["spent"] for row in budgeted)
+
     return render_template(
         "home.html",
         title="Dashboard",
+        budget_total=budget_total,
+        budget_left=budget_left,
+        current_month=date.today().strftime("%b"),
         username=g.user["username"],
         transactions=transactions,
         total_spent=sum(row["spent"] for row in budget_rows),

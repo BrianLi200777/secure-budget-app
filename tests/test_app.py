@@ -250,6 +250,18 @@ def test_change_budget_box_is_prefilled_with_current_limit(logged_in):
     assert b'value="250.00"' in response.data
 
 
+@pytest.mark.parametrize("limit, expected", [
+    ("200", b"$50.00</strong>\n        <small>left of $200.00 budgeted"),
+    ("100", b"$50.00 over</strong>"),
+])
+def test_budget_left_summary(logged_in, limit, expected):
+    add_transactions([("a", 2, "Starbucks", 150.00, "FOOD_AND_DRINK")])
+    response = logged_in.post("/budgets", data={
+        "category": "FOOD_AND_DRINK", "limit": limit, "csrf_token": csrf_token(logged_in, "/"),
+    }, follow_redirects=True)
+    assert expected in response.data
+
+
 def test_remove_button_deletes_budget(logged_in):
     token = csrf_token(logged_in, "/")
     logged_in.post("/budgets", data={"category": "TRAVEL", "limit": "300", "csrf_token": token})

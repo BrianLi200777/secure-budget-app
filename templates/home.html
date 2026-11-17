@@ -1,120 +1,155 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="dashboard">
-  <h1>Welcome, {{ username }}</h1>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">SB</span> Secure Budget</div>
+    <div class="user">
+      <span>{{ username }}</span>
+      <form method="post" action="{{ url_for('logout') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button type="submit" class="link">Log out</button>
+      </form>
+    </div>
+  </header>
 
-  <div class="stats">
-    <div class="stat">
+  <div class="greeting">
+    <h1>Welcome, {{ username }}</h1>
+    <p>Here's your money this month.</p>
+  </div>
+
+  <section class="stats">
+    <div class="card stat">
       <span>Spent this month</span>
       <strong>{{ total_spent|money }}</strong>
     </div>
-    <div class="stat">
+    <div class="card stat">
       <span>Money in this month</span>
       <strong class="in">+{{ money_in|money }}</strong>
     </div>
-  </div>
-
-  <h2 id="budgets">Budgets this month</h2>
-  {% for row in budget_rows %}
-    <div class="budget">
-      <div class="budget-line">
-        <span>{{ row.category|category_label }}</span>
-        <span>
-          {{ row.spent|money }}{% if row.limit %} of {{ row.limit|money }}{% endif %}
-          {% if row.status == "over" %}<em class="over">Over budget</em>
-          {% elif row.status == "near" %}<em class="near">Close to limit</em>{% endif %}
-        </span>
-      </div>
-      {% if row.limit %}
-        <div class="bar"><div class="fill {{ row.status }}" style="width: {{ [row.percent, 100]|min }}%"></div></div>
+    <div class="card stat">
+      <span>Budget left this month</span>
+      {% if not budget_total %}
+        <strong>&mdash;</strong>
+        <small>No budgets set yet</small>
+      {% elif budget_left >= 0 %}
+        <strong>{{ budget_left|money }}</strong>
+        <small>left of {{ budget_total|money }} budgeted</small>
+      {% else %}
+        <strong class="over-text">{{ budget_left|money }} over</strong>
+        <small>of {{ budget_total|money }} budgeted</small>
       {% endif %}
-      <details class="edit-budget">
-        <summary>{{ "Change budget" if row.limit else "Set a budget" }}</summary>
-        <form method="post" action="{{ url_for('set_budget') }}" class="inline">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="hidden" name="category" value="{{ row.category }}">
-          <label class="money-input">$
-            <input name="limit" type="number" min="0.01" max="1000000" step="0.01" required
-                   value="{{ '%.2f'|format(row.limit) if row.limit }}" placeholder="e.g. 200"
-                   aria-label="Monthly budget for {{ row.category|category_label }}">
-          </label>
-          <button type="submit">Save</button>
-          {% if row.limit %}
-            <button type="submit" name="action" value="remove" class="secondary" formnovalidate>Remove</button>
-          {% endif %}
-        </form>
-      </details>
     </div>
-  {% else %}
-    <p>No spending yet this month.</p>
-  {% endfor %}
+  </section>
 
-  {% if other_categories %}
-    <details class="edit-budget add-budget">
-      <summary>+ Add a budget for another category</summary>
-      <form method="post" action="{{ url_for('set_budget') }}" class="inline">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <select name="category" aria-label="Category">
-          {% for category in other_categories %}
-            <option value="{{ category }}">{{ category|category_label }}</option>
-          {% endfor %}
-        </select>
-        <label class="money-input">$
-          <input name="limit" type="number" min="0.01" max="1000000" step="0.01" required
-                 placeholder="e.g. 200" aria-label="Monthly budget">
-        </label>
-        <button type="submit">Save</button>
-      </form>
-    </details>
-  {% endif %}
-
-  {% if chart %}
-    <h2>Spending by month</h2>
-    <div class="chart">
-      {% for month in chart %}
-        <div class="column">
-          <span class="amount">{{ month.spent|money }}</span>
-          <div class="column-bar" style="height: {{ month.height }}%"></div>
-          <span class="label">{{ month.label }}</span>
-        </div>
-      {% endfor %}
-    </div>
-  {% endif %}
-
-  <h2>Transactions</h2>
-  <button id="connect-bank" type="button">Connect a bank</button>
-  <form method="post" action="{{ url_for('refresh_transactions') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="secondary">Refresh transactions</button>
-  </form>
-
-  {% if transactions %}
-    <table>
-      <thead><tr><th>Date</th><th>Name</th><th>Category</th><th class="num">Amount</th></tr></thead>
-      <tbody>
-        {% for t in transactions %}
-          <tr>
-            <td>{{ t.date }}</td>
-            <td>{{ t.name }}</td>
-            <td>{{ t.category|category_label }}</td>
-            {# Plaid uses positive for money out, negative for money in. #}
-            {% if t.amount < 0 %}
-              <td class="num in">+{{ t.amount|money }}</td>
-            {% else %}
-              <td class="num">{{ t.amount|money }}</td>
+  <div class="columns">
+    <div class="stack">
+      <section class="card">
+        <div class="card-header"><h2 id="budgets">Budgets this month</h2></div>
+        {% for row in budget_rows %}
+          <div class="budget">
+            <div class="budget-line">
+              <span class="budget-name">{{ row.category|category_label }}</span>
+              <span class="budget-amount">
+                <b>{{ row.spent|money }}</b>{% if row.limit %} of {{ row.limit|money }}{% endif %}
+                {% if row.status == "over" %}<span class="pill over">Over budget</span>
+                {% elif row.status == "near" %}<span class="pill near">Close to limit</span>{% endif %}
+              </span>
+            </div>
+            {% if row.limit %}
+              <div class="bar"><div class="fill {{ row.status }}" style="width: {{ [row.percent, 100]|min }}%"></div></div>
             {% endif %}
-          </tr>
+            <details class="edit-budget">
+              <summary>{{ "Change budget" if row.limit else "Set a budget" }}</summary>
+              <form method="post" action="{{ url_for('set_budget') }}" class="inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="category" value="{{ row.category }}">
+                <label class="money-input"><span>$</span>
+                  <input name="limit" type="number" min="0.01" max="1000000" step="0.01" required
+                         value="{{ '%.2f'|format(row.limit) if row.limit }}" placeholder="e.g. 200"
+                         aria-label="Monthly budget for {{ row.category|category_label }}">
+                </label>
+                <button type="submit">Save</button>
+                {% if row.limit %}
+                  <button type="submit" name="action" value="remove" class="secondary" formnovalidate>Remove</button>
+                {% endif %}
+              </form>
+            </details>
+          </div>
+        {% else %}
+          <p class="empty">No spending yet this month.</p>
         {% endfor %}
-      </tbody>
-    </table>
-  {% else %}
-    <p>No transactions yet. Connect a bank to get started.</p>
-  {% endif %}
 
-  <form method="post" action="{{ url_for('logout') }}">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button type="submit" class="secondary">Log out</button>
-  </form>
+        {% if other_categories %}
+          <details class="edit-budget add-budget">
+            <summary>+ Add a budget for another category</summary>
+            <form method="post" action="{{ url_for('set_budget') }}" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <select name="category" aria-label="Category">
+                {% for category in other_categories %}
+                  <option value="{{ category }}">{{ category|category_label }}</option>
+                {% endfor %}
+              </select>
+              <label class="money-input"><span>$</span>
+                <input name="limit" type="number" min="0.01" max="1000000" step="0.01" required
+                       placeholder="e.g. 200" aria-label="Monthly budget">
+              </label>
+              <button type="submit">Save</button>
+            </form>
+          </details>
+        {% endif %}
+      </section>
+
+      {% if chart %}
+        <section class="card">
+          <div class="card-header"><h2>Spending by month</h2></div>
+          <div class="chart">
+            {% for month in chart %}
+              <div class="column{% if loop.last and month.label == current_month %} current{% endif %}">
+                <span class="amount">{{ month.spent|money }}</span>
+                <div class="column-bar" style="height: {{ month.height }}%"></div>
+                <span class="label">{{ month.label }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </section>
+      {% endif %}
+    </div>
+
+    <section class="card">
+      <div class="card-header">
+        <h2>Transactions</h2>
+        <div class="actions">
+          <form method="post" action="{{ url_for('refresh_transactions') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="secondary">Refresh</button>
+          </form>
+          <button id="connect-bank" type="button">Connect a bank</button>
+        </div>
+      </div>
+
+      {% if transactions %}
+        <ul class="tx-list">
+          {% for t in transactions %}
+            <li>
+              <span class="tx-icon cat-{{ t.category or 'OTHER' }}" aria-hidden="true">{{ (t.category|category_label)[0] }}</span>
+              <div class="tx-main">
+                <span class="tx-name">{{ t.name }}</span>
+                <span class="tx-meta">{{ t.category|category_label }} · {{ t.date|short_date }}</span>
+              </div>
+              {# Plaid uses positive for money out, negative for money in. #}
+              {% if t.amount < 0 %}
+                <span class="tx-amount in">+{{ t.amount|money }}</span>
+              {% else %}
+                <span class="tx-amount">{{ t.amount|money }}</span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="empty">No transactions yet. Connect a bank to get started.</p>
+      {% endif %}
+    </section>
+  </div>
 </div>
 
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
