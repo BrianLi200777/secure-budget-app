@@ -1,4 +1,5 @@
 import os
+import secrets
 import sqlite3
 import time
 from datetime import date, datetime
@@ -165,9 +166,14 @@ def init_db():
             """CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 username TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL
+                password_hash TEXT NOT NULL,
+                session_token TEXT
             )"""
         )
+        # Databases made before session_token existed get the column added.
+        columns = [row[1] for row in db.execute("PRAGMA table_info(users)")]
+        if "session_token" not in columns:
+            db.execute("ALTER TABLE users ADD COLUMN session_token TEXT")
         db.execute(
             """CREATE TABLE IF NOT EXISTS items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -201,8 +207,24 @@ def init_db():
 def login_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if "user_id" not in session:
+        user = None
+        if "user_id" in session:
+            user = get_db().execute(
+                "SELECT id, username, session_token FROM users WHERE id = ?",
+                (session["user_id"],),
+            ).fetchone()
+        # The login cookie must match this account's random token, not just its ID.
+        # Otherwise, after a database reset, an old cookie could open whichever new
+        # account reused that ID. Also catches accounts that no longer exist.
+        if user is None or not secrets.compare_digest(
+            user["session_token"] or "", session.get("session_token", "")
+        ):
+            if "user_id" in session:
+                # Throw away the stale login, but keep the CSRF token of visitors who
+                # were never logged in.
+                session.clear()
             return redirect(url_for("login"))
+        g.user = user
         return view(*args, **kwargs)
 
     return wrapped
@@ -212,10 +234,7 @@ def login_required(view):
 @login_required
 def home():
     db = get_db()
-    user = db.execute(
-        "SELECT username FROM users WHERE id = ?", (session["user_id"],)
-    ).fetchone()
-    user_id = session["user_id"]
+    user_id = g.user["id"]
     transactions = db.execute(
         "SELECT date, name, amount, category FROM transactions WHERE user_id = ? "
         "ORDER BY date DESC",
@@ -288,7 +307,7 @@ def home():
     return render_template(
         "home.html",
         title="Dashboard",
-        username=user["username"],
+        username=g.user["username"],
         transactions=transactions,
         total_spent=sum(row["spent"] for row in budget_rows),
         money_in=money_in,
@@ -464,8 +483,8 @@ def register():
                 db = get_db()
                 # "?" placeholders keep user input from being run as SQL (SQL injection).
                 db.execute(
-                    "INSERT INTO users (username, password_hash) VALUES (?, ?)",
-                    (username, password_hasher.hash(password)),
+                    "INSERT INTO users (username, password_hash, session_token) VALUES (?, ?, ?)",
+                    (username, password_hasher.hash(password), secrets.token_hex(32)),
                 )
                 db.commit()
                 flash("Account created. Please log in.")
@@ -484,7 +503,7 @@ def login():
         password = request.form.get("password", "")
         db = get_db()
         user = db.execute(
-            "SELECT id, password_hash FROM users WHERE username = ?", (username,)
+            "SELECT id, password_hash, session_token FROM users WHERE username = ?", (username,)
         ).fetchone()
 
         try:
@@ -503,9 +522,19 @@ def login():
             )
             db.commit()
 
+        session_token = user["session_token"]
+        if session_token is None:
+            # Accounts created before session tokens existed get one now.
+            session_token = secrets.token_hex(32)
+            db.execute(
+                "UPDATE users SET session_token = ? WHERE id = ?", (session_token, user["id"])
+            )
+            db.commit()
+
         # Start a fresh session so an attacker can't plant a session ID beforehand.
         session.clear()
         session["user_id"] = user["id"]
+        session["session_token"] = session_token
         return redirect(url_for("home"))
 
     return render_template("auth.html", title="Log in", other="register")

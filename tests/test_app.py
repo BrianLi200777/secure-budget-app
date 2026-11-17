@@ -136,6 +136,32 @@ def test_logout(logged_in):
     assert logged_in.get("/").status_code == 302
 
 
+def reset_database():
+    os.remove(app_module.DATABASE)
+    app_module.init_db()
+
+
+def test_old_login_cookie_after_database_reset_goes_to_login(logged_in):
+    reset_database()
+    response = logged_in.get("/")
+    assert response.status_code == 302
+    assert "/login" in response.location
+
+
+def test_old_login_cookie_cannot_open_new_account_with_same_id(client):
+    register(client, username="alice")
+    login(client, username="alice")
+    reset_database()
+    bob = app_module.app.test_client()
+    register(bob, username="bob")  # bob now has alice's old user ID
+    login(bob, username="bob")
+
+    response = client.get("/")  # alice's old cookie
+    assert response.status_code == 302
+    assert "/login" in response.location
+    assert b"Welcome, bob" in bob.get("/").data
+
+
 # ---------- Plaid ----------
 
 def test_plaid_routes_require_login(client):
