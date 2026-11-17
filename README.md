@@ -4,7 +4,11 @@
 
 A personal budgeting app that connects to bank accounts through the [Plaid API](https://plaid.com/docs/), built with security as the main focus. Bank access tokens are encrypted at rest, passwords are hashed with Argon2, and every form is protected against CSRF.
 
-> Runs in Plaid's **Sandbox**: it only connects to Plaid's test banks with fake data. It never touches real bank accounts.
+**Live demo:** https://secure-budget-app.onrender.com
+
+> Runs in Plaid's **Sandbox**: it only connects to Plaid's test banks with fake data. It never touches real bank accounts. To try it, create an account, click **Connect a bank**, and use Plaid's test login `user_good` / `pass_good`.
+>
+> The demo is on Render's free plan, so the first visit may take about a minute to wake up, and the database resets when the service restarts.
 
 ![Dashboard showing monthly spending, budgets, a 6-month chart, and transactions](docs/dashboard.jpg)
 
@@ -108,4 +112,4 @@ The tests cover login, password hashing, token encryption, transaction sync, bud
 
 - [ ] Threat model write-up (STRIDE)
 - [ ] Two-factor login (TOTP)
-- [ ] Deploy a live demo
+- [x] Deploy a live demo (Render, gunicorn, HTTPS-only cookies, HSTS)
