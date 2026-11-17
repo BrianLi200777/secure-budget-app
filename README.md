@@ -6,9 +6,11 @@ A personal budgeting app that connects to bank accounts through the [Plaid API](
 
 **Live demo:** https://secure-budget-app.onrender.com
 
-> Runs in Plaid's **Sandbox**: it only connects to Plaid's test banks with fake data. It never touches real bank accounts. To try it, create an account, click **Connect a bank**, and use Plaid's test login `user_good` / `pass_good`.
+> **Try it:** log in as `demo` / `try-the-demo` to see sample data, or create your own account and click **Connect a bank** (Plaid's test login is `user_good` / `pass_good`).
 >
-> The demo is on Render's free plan, so the first visit may take about a minute to wake up, and the database resets when the service restarts.
+> Runs in Plaid's **Sandbox**: it only connects to Plaid's test banks with fake data. It never touches real bank accounts. The demo account is shared by everyone who uses it.
+>
+> The demo is on Render's free plan, so the first visit may take about a minute to wake up, and the database resets when the service restarts (the demo account is re-created each time).
 
 ![Dashboard showing monthly spending, budgets, a 6-month chart, and transactions](docs/dashboard.jpg)
 

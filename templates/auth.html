@@ -11,6 +11,9 @@
            autocomplete="{{ 'new-password' if other == 'login' else 'current-password' }}">
     <button type="submit">{{ title }}</button>
   </form>
+  {% if demo_password and other == "register" %}
+    <p class="demo-hint">Just looking? Log in as <b>demo</b> with password <b>{{ demo_password }}</b></p>
+  {% endif %}
   {% if other == "login" %}
     <p class="switch">Already have an account? <a href="{{ url_for('login') }}">Log in</a></p>
   {% else %}

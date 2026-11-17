@@ -2,7 +2,7 @@ import os
 import secrets
 import sqlite3
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import wraps
 
 import plaid
@@ -82,6 +82,43 @@ plaid_client = plaid_api.PlaidApi(
 )
 # Plaid rejected the request, or we couldn't reach Plaid at all.
 PLAID_ERRORS = (plaid.ApiException, urllib3.exceptions.HTTPError)
+
+# Optional shared "demo" account so visitors can try the app without signing up.
+# Its password is public on purpose (it's shown on the login page), so only set
+# DEMO_PASSWORD on a demo site with fake data.
+DEMO_PASSWORD = os.environ.get("DEMO_PASSWORD", "")
+DEMO_ITEM_ID = "demo-sample-data"
+# (days ago, name, amount, category). Positive = money out, like Plaid.
+DEMO_TRANSACTIONS = [
+    (0, "Starbucks", 4.75, "FOOD_AND_DRINK"),
+    (1, "Whole Foods", 86.40, "FOOD_AND_DRINK"),
+    (2, "Uber", 18.20, "TRANSPORTATION"),
+    (3, "Chipotle", 13.75, "FOOD_AND_DRINK"),
+    (4, "Gusto Payroll", -2400.00, "INCOME"),
+    (5, "SparkFun", 89.40, "GENERAL_MERCHANDISE"),
+    (6, "Trader Joe's", 112.90, "FOOD_AND_DRINK"),
+    (8, "Touchstone Climbing", 78.50, "PERSONAL_CARE"),
+    (9, "Eversource Energy", 64.10, "RENT_AND_UTILITIES"),
+    (11, "United Airlines refund", -120.00, "TRAVEL"),
+    (12, "AMC Theatres", 28.00, "ENTERTAINMENT"),
+    (14, "Rent", 900.00, "RENT_AND_UTILITIES"),
+    (20, "Gusto Payroll", -2400.00, "INCOME"),
+    (25, "Target", 120.45, "GENERAL_MERCHANDISE"),
+    (33, "Whole Foods", 95.10, "FOOD_AND_DRINK"),
+    (40, "Rent", 900.00, "RENT_AND_UTILITIES"),
+    (48, "Madison Bicycle Shop", 240.00, "TRANSPORTATION"),
+    (61, "KFC", 22.10, "FOOD_AND_DRINK"),
+    (70, "Rent", 900.00, "RENT_AND_UTILITIES"),
+    (88, "Amazon", 210.00, "GENERAL_MERCHANDISE"),
+    (100, "Rent", 900.00, "RENT_AND_UTILITIES"),
+    (115, "McDonald's", 31.00, "FOOD_AND_DRINK"),
+    (130, "Rent", 900.00, "RENT_AND_UTILITIES"),
+    (150, "AMC Theatres", 28.00, "ENTERTAINMENT"),
+]
+DEMO_BUDGETS = {
+    "FOOD_AND_DRINK": 300, "GENERAL_MERCHANDISE": 100,
+    "TRANSPORTATION": 150, "ENTERTAINMENT": 60,
+}
 
 # Money moving between your own accounts isn't spending. A credit card payment would
 # double-count purchases already made on the card.
@@ -208,6 +245,39 @@ def init_db():
                 PRIMARY KEY (user_id, category)
             )"""
         )
+
+
+def seed_demo_account(password):
+    """Create the demo account with sample data, unless it already exists."""
+    with sqlite3.connect(DATABASE) as db:
+        if db.execute("SELECT 1 FROM users WHERE username = 'demo'").fetchone():
+            return
+        user_id = db.execute(
+            "INSERT INTO users (username, password_hash, session_token) VALUES ('demo', ?, ?)",
+            (password_hasher.hash(password), secrets.token_hex(32)),
+        ).lastrowid
+        # A stand-in bank connection that holds the sample data. Sync skips it.
+        item_id = db.execute(
+            "INSERT INTO items (user_id, plaid_item_id, access_token_encrypted) VALUES (?, ?, ?)",
+            (user_id, DEMO_ITEM_ID, fernet.encrypt(b"no-real-bank")),
+        ).lastrowid
+        today = date.today()
+        db.executemany(
+            "INSERT INTO transactions (id, user_id, item_id, date, name, amount, category) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(f"demo-{user_id}-{n}", user_id, item_id,
+              (today - timedelta(days=days_ago)).isoformat(), name, amount, category)
+             for n, (days_ago, name, amount, category) in enumerate(DEMO_TRANSACTIONS)],
+        )
+        db.executemany(
+            "INSERT INTO budgets (user_id, category, monthly_limit) VALUES (?, ?, ?)",
+            [(user_id, category, limit) for category, limit in DEMO_BUDGETS.items()],
+        )
+
+
+@app.context_processor
+def demo_login_hint():
+    return {"demo_password": DEMO_PASSWORD}
 
 
 def login_required(view):
@@ -433,8 +503,9 @@ def refresh_transactions():
 def sync_transactions(user_id):
     db = get_db()
     items = db.execute(
-        "SELECT id, access_token_encrypted, cursor FROM items WHERE user_id = ?",
-        (user_id,),
+        "SELECT id, access_token_encrypted, cursor FROM items "
+        "WHERE user_id = ? AND plaid_item_id != ?",
+        (user_id, DEMO_ITEM_ID),
     ).fetchall()
     for item in items:
         access_token = fernet.decrypt(item["access_token_encrypted"]).decode()
@@ -562,6 +633,8 @@ def logout():
 
 
 init_db()
+if DEMO_PASSWORD:
+    seed_demo_account(DEMO_PASSWORD)
 
 if __name__ == "__main__":
     # Debug mode (auto-reload, error pages that can run code) only on your own computer.

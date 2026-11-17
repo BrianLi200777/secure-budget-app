@@ -14,6 +14,9 @@ services:
         value: production
       - key: PLAID_ENV
         value: sandbox
+      # Public on purpose: shown on the login page so visitors can try the demo.
+      - key: DEMO_PASSWORD
+        value: try-the-demo
       # Render creates a random value for this one.
       - key: FLASK_SECRET_KEY
         generateValue: true

@@ -162,6 +162,52 @@ def test_old_login_cookie_cannot_open_new_account_with_same_id(client):
     assert b"Welcome, bob" in bob.get("/").data
 
 
+# ---------- Demo account ----------
+
+DEMO_PASS = "demo-test-pass"
+
+
+def test_demo_account_has_sample_data(client):
+    app_module.seed_demo_account(DEMO_PASS)
+    page = login(client, username="demo", password=DEMO_PASS).data
+    assert b"Welcome, demo" in page
+    assert b"Gusto Payroll" in page
+    assert b"Change budget" in page
+
+
+def test_demo_account_is_only_created_once(client):
+    app_module.seed_demo_account(DEMO_PASS)
+    app_module.seed_demo_account(DEMO_PASS)
+    conn = db()
+    assert conn.execute("SELECT COUNT(*) FROM users WHERE username = 'demo'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == len(app_module.DEMO_TRANSACTIONS)
+
+
+def test_refresh_skips_demo_sample_data(client, fake_plaid, monkeypatch):
+    def fail(request):
+        raise AssertionError("should not ask Plaid about the sample data")
+
+    monkeypatch.setattr(fake_plaid, "transactions_sync", fail)
+    app_module.seed_demo_account(DEMO_PASS)
+    login(client, username="demo", password=DEMO_PASS)
+    response = client.post("/plaid/sync", data={"csrf_token": csrf_token(client, "/")},
+                           follow_redirects=True)
+    assert b"Could not refresh" not in response.data
+
+
+def test_login_page_shows_demo_hint_only_when_enabled(client, monkeypatch):
+    assert b"Just looking?" not in client.get("/login").data
+    monkeypatch.setattr(app_module, "DEMO_PASSWORD", DEMO_PASS)
+    page = client.get("/login").data
+    assert b"Just looking?" in page and DEMO_PASS.encode() in page
+    assert b"Just looking?" not in client.get("/register").data
+
+
+def test_cannot_register_as_demo(client):
+    app_module.seed_demo_account(DEMO_PASS)
+    assert b"taken" in register(client, username="demo").data
+
+
 # ---------- Plaid ----------
 
 def test_plaid_routes_require_login(client):
