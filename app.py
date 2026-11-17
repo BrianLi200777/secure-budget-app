@@ -220,11 +220,13 @@ def home():
     # "Spent" counts purchases only (amount > 0). Refunds count under "money in" instead,
     # so they're never counted twice.
     # One "?" per excluded category, so the values still go in as safe parameters.
+    # Only these "?" marks are added to the query text (never user input), which is why
+    # the bandit SQL-injection warning below is marked as a reviewed false positive.
     not_spending = ",".join("?" * len(NOT_SPENDING))
     spent_by_category = {
         row[0]: row[1]
         for row in db.execute(
-            "SELECT COALESCE(category, 'OTHER'), SUM(amount) FROM transactions "
+            "SELECT COALESCE(category, 'OTHER'), SUM(amount) FROM transactions "  # nosec B608
             f"WHERE user_id = ? AND date >= ? AND amount > 0 AND COALESCE(category, 'OTHER') NOT IN ({not_spending}) "
             "GROUP BY 1",
             (user_id, month_start, *NOT_SPENDING),
@@ -262,7 +264,7 @@ def home():
     budget_rows.sort(key=lambda row: row["spent"], reverse=True)
 
     monthly = db.execute(
-        "SELECT substr(date, 1, 7) AS month, SUM(amount) AS spent FROM transactions "
+        "SELECT substr(date, 1, 7) AS month, SUM(amount) AS spent FROM transactions "  # nosec B608
         f"WHERE user_id = ? AND amount > 0 AND COALESCE(category, 'OTHER') NOT IN ({not_spending}) "
         "GROUP BY month ORDER BY month DESC LIMIT 6",
         (user_id, *NOT_SPENDING),
@@ -512,4 +514,5 @@ def logout():
 init_db()
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5001)
+    # Debug mode (auto-reload, error pages that can run code) only on your own computer.
+    app.run(debug=not PRODUCTION, port=5001)

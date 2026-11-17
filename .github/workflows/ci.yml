@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# This workflow only needs to read the code, nothing more.
+permissions:
+  contents: read
+
+jobs:
+  test-and-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          cache: pip
+
+      - name: Install packages
+        run: pip install -r requirements.txt pytest==9.2.0 bandit==1.9.4 pip-audit==2.10.1
+
+      # Tests use fake keys and a fake Plaid, so no secrets are needed here.
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Scan code for security issues (bandit)
+        run: bandit -r app.py
+
+      - name: Check packages for known vulnerabilities (pip-audit)
+        run: pip-audit -r requirements.txt
