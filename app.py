@@ -21,6 +21,7 @@ from plaid.model.link_token_create_request import LinkTokenCreateRequest
 from plaid.model.link_token_create_request_user import LinkTokenCreateRequestUser
 from plaid.model.products import Products
 from plaid.model.transactions_sync_request import TransactionsSyncRequest
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 load_dotenv()
 
@@ -35,6 +36,11 @@ app.config["SESSION_COOKIE_HTTPONLY"] = True
 PRODUCTION = os.environ.get("APP_ENV") == "production"
 # Only send the login cookie over HTTPS. Off locally, where there's no HTTPS.
 app.config["SESSION_COOKIE_SECURE"] = PRODUCTION
+if PRODUCTION:
+    # Online, the host's proxy (one hop) forwards each request. Trust its headers for
+    # the visitor's real IP (so rate limits are per visitor) and for HTTPS. Not trusted
+    # locally, where anyone could fake these headers to dodge the rate limit.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 
 # Every form and POST request must carry a secret token that only our own pages have,
 # so other websites can't submit requests as a logged-in user (CSRF).

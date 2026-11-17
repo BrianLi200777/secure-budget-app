@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: secure-budget-app
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # One worker so the in-memory login rate limit counts every request in one place.
+    startCommand: gunicorn app:app --workers 1 --threads 4
+    healthCheckPath: /login
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.14.0"
+      - key: APP_ENV
+        value: production
+      - key: PLAID_ENV
+        value: sandbox
+      # Render creates a random value for this one.
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      # "sync: false" means Render asks you to type these in. They never go in the repo.
+      - key: FERNET_KEY
+        sync: false
+      - key: PLAID_CLIENT_ID
+        sync: false
+      - key: PLAID_SECRET
+        sync: false
