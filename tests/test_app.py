@@ -241,6 +241,33 @@ def test_invalid_budget_limits_rejected(logged_in, bad_limit):
     assert b"must be a number" in response.data
 
 
+def test_change_budget_box_is_prefilled_with_current_limit(logged_in):
+    add_transactions([("a", 2, "Starbucks", 150.00, "FOOD_AND_DRINK")])
+    response = logged_in.post("/budgets", data={
+        "category": "FOOD_AND_DRINK", "limit": "250", "csrf_token": csrf_token(logged_in, "/"),
+    }, follow_redirects=True)
+    assert b"Change budget" in response.data
+    assert b'value="250.00"' in response.data
+
+
+def test_remove_button_deletes_budget(logged_in):
+    token = csrf_token(logged_in, "/")
+    logged_in.post("/budgets", data={"category": "TRAVEL", "limit": "300", "csrf_token": token})
+    response = logged_in.post("/budgets", data={
+        "category": "TRAVEL", "limit": "300", "action": "remove", "csrf_token": token,
+    }, follow_redirects=True)
+    assert b"Budget removed for Travel" in response.data
+    assert db().execute("SELECT COUNT(*) FROM budgets").fetchone()[0] == 0
+
+
+def test_add_budget_list_skips_categories_already_shown(logged_in):
+    add_transactions([("a", 2, "Starbucks", 150.00, "FOOD_AND_DRINK")])
+    page = logged_in.get("/").data.decode()
+    add_form = page.split("Add a budget for another category")[1]
+    assert 'value="FOOD_AND_DRINK"' not in add_form
+    assert 'value="TRAVEL"' in add_form
+
+
 def test_made_up_budget_category_rejected(logged_in):
     response = logged_in.post("/budgets", data={
         "category": "HACKED", "limit": "50", "csrf_token": csrf_token(logged_in, "/"),

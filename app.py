@@ -313,7 +313,9 @@ def home():
         money_in=money_in,
         budget_rows=budget_rows,
         chart=chart,
-        budget_categories=BUDGET_CATEGORIES,
+        # Categories with no spending or budget yet, for "Add a budget".
+        other_categories=[c for c in BUDGET_CATEGORIES
+                          if c not in {row["category"] for row in budget_rows}],
     )
 
 
@@ -327,7 +329,7 @@ def set_budget():
         return redirect(url_for("home"))
 
     db = get_db()
-    if limit_text in ("", "0"):
+    if request.form.get("action") == "remove" or limit_text in ("", "0"):
         db.execute(
             "DELETE FROM budgets WHERE user_id = ? AND category = ?",
             (session["user_id"], category),
