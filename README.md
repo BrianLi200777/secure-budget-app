@@ -12,17 +12,23 @@ A personal budgeting app that connects to bank accounts through the [Plaid API](
 >
 > The demo is on Render's free plan, so the first visit may take about a minute to wake up, and the database resets when the service restarts (the demo account is re-created each time).
 
-![Dashboard showing monthly spending, budgets, a 6-month chart, and transactions](docs/dashboard.jpg)
+![Budget page: cash in your accounts, monthly spending, budgets with warnings, a 6-month chart, and account balances](docs/budget.jpg)
 
-*Screenshot uses made-up demo data.*
+![Transactions page: each purchase with its category, and a search box to move it into another category](docs/transactions.jpg)
+
+*Screenshots use made-up demo data.*
 
 ## Features
 
 - **Connect a bank** with Plaid Link, Plaid's official bank-connection pop-up.
 - **Transaction sync** using Plaid's `/transactions/sync`, which remembers where it left off, so a refresh only fetches what's new.
-- **Monthly summary** of money spent and money received.
+- **Account balances**: cash in checking and savings, with credit cards and loans shown as money owed.
+- **Monthly summary** of money spent, money received, and budget left.
 - **Per-category budgets** with warnings at 80% ("Close to limit") and 100% ("Over budget").
+- **Custom categories**: a type-to-search box suggests categories, and any new name becomes your own category.
+- **Auto-sorting rules**: move one purchase (say, Starbucks into "Coffee") and every past and future purchase with that name follows. Undo turns the rule off.
 - **Spending chart** for the last 6 months.
+- **Separate Budget and Transactions pages**, with a layout that works on phones.
 
 ## Security
 
@@ -35,12 +41,15 @@ A personal budgeting app that connects to bank accounts through the [Plaid API](
 | Password guessing | **Rate limit**: 5 login attempts per minute per IP (Flask-Limiter). | `login()` |
 | Username discovery | The same "Invalid username or password" message whether the user exists or not. | `login()` |
 | Session fixation | The session is cleared and rebuilt on every login. | `login()` |
+| Old or reused login cookies | Each account has a random session token that the login cookie must match, so a cookie can't open a different account after the database is reset. | `login_required()` |
+| Seeing or changing other users' data | Every query, including category changes and auto-sorting rules, is limited to the logged-in user's own rows. Tests check this. | All queries |
+| Collecting more than needed | Only each purchase's name, amount, date, and category, and each account's name, type, and balance, are stored. No account numbers. | `sync_transactions()` |
 | Cross-site scripting (XSS) | Jinja auto-escaping, plus a **Content-Security-Policy** that allows scripts only from this app and Plaid and **blocks all inline scripts**. | `set_security_headers()` |
 | Clickjacking | `frame-ancestors 'none'` and `X-Frame-Options: DENY`. | `set_security_headers()` |
 | Cookie theft | Session cookie is `HttpOnly` and `SameSite=Lax`, and `Secure` (HTTPS-only) in production. HSTS is on in production. | App config |
 | Sensitive data in browser cache | `Cache-Control: no-store` on every response. | `set_security_headers()` |
 | Leaking error details | Plaid errors are logged on the server. Users only see a generic message. | Plaid routes |
-| Bad input | Budget limits checked on the server (rejects text, negatives, `nan`, `inf`, huge values). Categories must come from a fixed list. | `set_budget()` |
+| Bad input | Budget limits checked on the server (rejects text, negatives, `nan`, `inf`, huge values). Category names are limited to 30 printable characters. | `set_budget()`, `parse_category()` |
 | Secrets in the repo | All keys live in `.env`, which is in `.gitignore`. [.env.example](.env.example) shows only placeholders. | — |
 | Vulnerable code or packages | CI runs **bandit** (static security analysis) and **pip-audit** (known-vulnerability check) on every push. | [ci.yml](.github/workflows/ci.yml) |
 
@@ -64,7 +73,7 @@ sequenceDiagram
     A->>P: Exchange for access token
     A->>D: Save access token, Fernet-encrypted
     A->>P: /transactions/sync
-    A->>D: Save transactions
+    A->>D: Save transactions and balances (apply your sorting rules)
     A-->>B: Dashboard
 ```
 
@@ -108,7 +117,7 @@ bandit -r app.py            # static security analysis
 pip-audit -r requirements.txt   # known vulnerabilities in dependencies
 ```
 
-The tests cover login, password hashing, token encryption, transaction sync, budget math, CSRF, security headers, cookie flags, rate limiting, and making sure users can't see each other's data.
+The tests cover login, password hashing, token encryption, transaction sync, balances, budget math, custom categories and sorting rules, CSRF, security headers, cookie flags, rate limiting, and making sure users can't see or change each other's data.
 
 ## Roadmap
 
