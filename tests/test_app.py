@@ -87,7 +87,8 @@ def add_transactions(rows, user_id=1):
     conn.execute("INSERT INTO items (user_id, plaid_item_id, access_token_encrypted) "
                  "VALUES (?, 'item', x'00')", (user_id,))
     conn.executemany(
-        "INSERT INTO transactions VALUES (?, ?, 1, ?, ?, ?, ?)",
+        "INSERT INTO transactions (id, user_id, item_id, date, name, amount, category) "
+        "VALUES (?, ?, 1, ?, ?, ?, ?)",
         [(tid, user_id, month.replace(day=day).isoformat(), name, amount, category)
          for tid, day, name, amount, category in rows],
     )
@@ -318,19 +319,94 @@ def test_remove_button_deletes_budget(logged_in):
     assert db().execute("SELECT COUNT(*) FROM budgets").fetchone()[0] == 0
 
 
-def test_add_budget_list_skips_categories_already_shown(logged_in):
-    add_transactions([("a", 2, "Starbucks", 150.00, "FOOD_AND_DRINK")])
-    page = logged_in.get("/").data.decode()
-    add_form = page.split("Add a budget for another category")[1]
-    assert 'value="FOOD_AND_DRINK"' not in add_form
-    assert 'value="TRAVEL"' in add_form
-
-
-def test_made_up_budget_category_rejected(logged_in):
-    response = logged_in.post("/budgets", data={
-        "category": "HACKED", "limit": "50", "csrf_token": csrf_token(logged_in, "/"),
+def set_budget(client, category, limit):
+    return client.post("/budgets", data={
+        "category": category, "limit": limit, "csrf_token": csrf_token(client, "/"),
     }, follow_redirects=True)
-    assert b"Pick a category" in response.data
+
+
+def move_transaction(client, transaction_id, category="", action=None):
+    data = {"category": category, "csrf_token": csrf_token(client, "/")}
+    if action:
+        data["action"] = action
+    return client.post(f"/transactions/{transaction_id}/category", data=data,
+                       follow_redirects=True)
+
+
+def test_search_box_suggests_built_in_and_custom_categories(logged_in):
+    set_budget(logged_in, "Coffee", "40")
+    suggestions = logged_in.get("/").data.decode().split('<datalist id="category-options">')[1]
+    assert '<option value="Travel">' in suggestions
+    assert '<option value="Coffee">' in suggestions
+
+
+def test_typed_built_in_name_uses_plaid_category(logged_in):
+    add_transactions([("a", 2, "Starbucks", 150.00, "FOOD_AND_DRINK")])
+    set_budget(logged_in, "food AND drink", "100")
+    assert db().execute("SELECT category FROM budgets").fetchone()[0] == "FOOD_AND_DRINK"
+
+
+def test_custom_category_keeps_first_spelling(logged_in):
+    set_budget(logged_in, "Coffee", "40")
+    set_budget(logged_in, "  coffee ", "50")
+    assert db().execute("SELECT category, monthly_limit FROM budgets").fetchall() == [("Coffee", 50.0)]
+
+
+@pytest.mark.parametrize("bad_name", ["", "   ", "x" * 31, "bad\x00name"])
+def test_bad_category_names_rejected(logged_in, bad_name):
+    response = set_budget(logged_in, bad_name, "50")
+    assert b"Type a category name" in response.data
+    assert db().execute("SELECT COUNT(*) FROM budgets").fetchone()[0] == 0
+
+
+def test_income_cannot_have_a_budget(logged_in):
+    response = set_budget(logged_in, "Income", "50")
+    assert b"can&#39;t have a budget" in response.data
+
+
+def test_custom_category_name_is_escaped(logged_in):
+    set_budget(logged_in, "<script>x</script>", "10")
+    page = logged_in.get("/").data
+    assert b"<script>x</script>" not in page
+    assert b"&lt;script&gt;" in page
+
+
+def test_moved_purchase_counts_toward_custom_budget(logged_in):
+    add_transactions([("a", 2, "Starbucks", 6.00, "FOOD_AND_DRINK"),
+                      ("b", 3, "Chipotle", 12.00, "FOOD_AND_DRINK")])
+    set_budget(logged_in, "Coffee", "40")
+    page = move_transaction(logged_in, "a", "Coffee").data.decode()
+    assert "Moved to Coffee" in page
+    assert re.search(r"Coffee</span>\s*<span class=\"budget-amount\">\s*<b>\$6.00</b> of \$40.00", page)
+    assert re.search(r"Food and drink</span>\s*<span class=\"budget-amount\">\s*<b>\$12.00</b>", page)
+
+
+def test_undo_puts_purchase_back_in_bank_category(logged_in):
+    add_transactions([("a", 2, "Starbucks", 6.00, "FOOD_AND_DRINK")])
+    move_transaction(logged_in, "a", "Coffee")
+    response = move_transaction(logged_in, "a", action="reset")
+    assert b"changed back" in response.data
+    assert db().execute("SELECT custom_category FROM transactions").fetchone()[0] is None
+
+
+def test_cannot_move_someone_elses_transaction(logged_in):
+    add_transactions([("theirs", 2, "Starbucks", 6.00, "FOOD_AND_DRINK")], user_id=99)
+    response = move_transaction(logged_in, "theirs", "Coffee")
+    assert b"Transaction not found" in response.data
+    assert db().execute("SELECT custom_category FROM transactions").fetchone()[0] is None
+
+
+def test_refresh_keeps_moved_category(logged_in, fake_plaid):
+    starbucks = {"transaction_id": "t1", "date": date.today(), "name": "Starbucks",
+                 "amount": 4.33, "personal_finance_category": {"primary": "FOOD_AND_DRINK"}}
+    fake_plaid.pending = [starbucks]
+    token = csrf_token(logged_in, "/")
+    logged_in.post("/plaid/exchange", json={"public_token": "public-fake"},
+                   headers={"X-CSRFToken": token})
+    move_transaction(logged_in, "t1", "Coffee")
+    fake_plaid.pending = [{**starbucks, "amount": 5.00}]  # Plaid sends an update for it.
+    logged_in.post("/plaid/sync", headers={"X-CSRFToken": token})
+    assert db().execute("SELECT amount, custom_category FROM transactions").fetchone() == (5.0, "Coffee")
 
 
 def test_users_cannot_see_each_others_data(logged_in):

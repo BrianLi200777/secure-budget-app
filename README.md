@@ -103,7 +103,7 @@ Open http://127.0.0.1:5001, create an account, and click **Connect a bank**. In 
 
 ```bash
 pip install pytest bandit pip-audit
-python -m pytest            # 27 tests; uses a fake Plaid and a temporary database
+python -m pytest            # 50 tests; uses a fake Plaid and a temporary database
 bandit -r app.py            # static security analysis
 pip-audit -r requirements.txt   # known vulnerabilities in dependencies
 ```

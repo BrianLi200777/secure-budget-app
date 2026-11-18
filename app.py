@@ -145,9 +145,38 @@ def money(amount):
     return f"${abs(amount):,.2f}"
 
 
+KNOWN_CATEGORIES = BUDGET_CATEGORIES + NOT_SPENDING
+
+
 @app.template_filter("category_label")
 def category_label(category):
-    return (category or "OTHER").replace("_", " ").capitalize()
+    category = category or "OTHER"
+    if category in KNOWN_CATEGORIES:
+        return category.replace("_", " ").capitalize()
+    return category  # A custom category: show it exactly as the user typed it.
+
+
+def parse_category(text, user_id):
+    """Turn what the user typed into a category, or None if it isn't usable.
+
+    Built-in names ("Food and drink") become Plaid's code ("FOOD_AND_DRINK").
+    Anything else becomes a custom category, reusing the user's existing spelling
+    so "coffee" and "Coffee" don't turn into two categories.
+    """
+    text = " ".join(text.split())
+    if not 1 <= len(text) <= 30 or not text.isprintable():
+        return None
+    for code in KNOWN_CATEGORIES:
+        if text.lower() in (code.lower(), category_label(code).lower()):
+            return code
+    for row in get_db().execute(
+        "SELECT category FROM budgets WHERE user_id = ? UNION "
+        "SELECT custom_category FROM transactions WHERE user_id = ? AND custom_category IS NOT NULL",
+        (user_id, user_id),
+    ):
+        if row[0].lower() == text.lower():
+            return row[0]
+    return text
 
 
 @app.template_filter("short_date")
@@ -234,9 +263,14 @@ def init_db():
                 date TEXT NOT NULL,
                 name TEXT NOT NULL,
                 amount REAL NOT NULL,
-                category TEXT
+                category TEXT,
+                custom_category TEXT
             )"""
         )
+        # Databases made before custom categories existed get the column added.
+        columns = [row[1] for row in db.execute("PRAGMA table_info(transactions)")]
+        if "custom_category" not in columns:
+            db.execute("ALTER TABLE transactions ADD COLUMN custom_category TEXT")
         db.execute(
             """CREATE TABLE IF NOT EXISTS budgets (
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -312,7 +346,8 @@ def home():
     db = get_db()
     user_id = g.user["id"]
     transactions = db.execute(
-        "SELECT date, name, amount, category FROM transactions WHERE user_id = ? "
+        "SELECT id, date, name, amount, custom_category, "
+        "COALESCE(custom_category, category) AS category FROM transactions WHERE user_id = ? "
         "ORDER BY date DESC",
         (user_id,),
     ).fetchall()
@@ -327,8 +362,8 @@ def home():
     spent_by_category = {
         row[0]: row[1]
         for row in db.execute(
-            "SELECT COALESCE(category, 'OTHER'), SUM(amount) FROM transactions "  # nosec B608
-            f"WHERE user_id = ? AND date >= ? AND amount > 0 AND COALESCE(category, 'OTHER') NOT IN ({not_spending}) "
+            "SELECT COALESCE(custom_category, category, 'OTHER'), SUM(amount) FROM transactions "  # nosec B608
+            f"WHERE user_id = ? AND date >= ? AND amount > 0 AND COALESCE(custom_category, category, 'OTHER') NOT IN ({not_spending}) "
             "GROUP BY 1",
             (user_id, month_start, *NOT_SPENDING),
         )
@@ -366,7 +401,7 @@ def home():
 
     monthly = db.execute(
         "SELECT substr(date, 1, 7) AS month, SUM(amount) AS spent FROM transactions "  # nosec B608
-        f"WHERE user_id = ? AND amount > 0 AND COALESCE(category, 'OTHER') NOT IN ({not_spending}) "
+        f"WHERE user_id = ? AND amount > 0 AND COALESCE(custom_category, category, 'OTHER') NOT IN ({not_spending}) "
         "GROUP BY month ORDER BY month DESC LIMIT 6",
         (user_id, *NOT_SPENDING),
     ).fetchall()
@@ -396,19 +431,25 @@ def home():
         money_in=money_in,
         budget_rows=budget_rows,
         chart=chart,
-        # Categories with no spending or budget yet, for "Add a budget".
-        other_categories=[c for c in BUDGET_CATEGORIES
-                          if c not in {row["category"] for row in budget_rows}],
+        # Suggestions for the category search boxes: built-in ones plus the user's own.
+        category_options=sorted(
+            {category_label(c) for c in BUDGET_CATEGORIES}
+            | {row["category"] for row in budget_rows if row["category"] not in KNOWN_CATEGORIES}
+            | {t["custom_category"] for t in transactions if t["custom_category"]}
+        ),
     )
 
 
 @app.route("/budgets", methods=["POST"])
 @login_required
 def set_budget():
-    category = request.form.get("category", "")
+    category = parse_category(request.form.get("category", ""), session["user_id"])
     limit_text = request.form.get("limit", "").strip()
-    if category not in BUDGET_CATEGORIES:
-        flash("Pick a category from the list.")
+    if category is None:
+        flash("Type a category name (up to 30 characters).")
+        return redirect(url_for("home"))
+    if category in NOT_SPENDING:
+        flash("Income and transfers aren't spending, so they can't have a budget.")
         return redirect(url_for("home"))
 
     db = get_db()
@@ -437,6 +478,32 @@ def set_budget():
     )
     db.commit()
     flash(f"Budget set: {category_label(category)}, {money(limit)} a month.")
+    return redirect(url_for("home"))
+
+
+@app.route("/transactions/<transaction_id>/category", methods=["POST"])
+@login_required
+def set_transaction_category(transaction_id):
+    if request.form.get("action") == "reset":
+        category = None
+    else:
+        category = parse_category(request.form.get("category", ""), session["user_id"])
+        if category is None:
+            flash("Type a category name (up to 30 characters).")
+            return redirect(url_for("home"))
+    db = get_db()
+    # "AND user_id = ?" means nobody can change someone else's transactions.
+    changed = db.execute(
+        "UPDATE transactions SET custom_category = ? WHERE id = ? AND user_id = ?",
+        (category, transaction_id, session["user_id"]),
+    ).rowcount
+    db.commit()
+    if not changed:
+        flash("Transaction not found.")
+    elif category is None:
+        flash("Category changed back to the bank's original.")
+    else:
+        flash(f"Moved to {category_label(category)}.")
     return redirect(url_for("home"))
 
 
@@ -521,9 +588,13 @@ def sync_transactions(user_id):
             for t in response["added"] + response["modified"]:
                 category = t.get("personal_finance_category")
                 db.execute(
-                    "INSERT OR REPLACE INTO transactions "
+                    "INSERT INTO transactions "
                     "(id, user_id, item_id, date, name, amount, category) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    # Keeps custom_category, so a moved purchase stays where the user put it.
+                    "ON CONFLICT (id) DO UPDATE SET date = excluded.date, name = excluded.name, "
+                    "amount = excluded.amount, category = excluded.category "
+                    "WHERE transactions.user_id = excluded.user_id",
                     (
                         t["transaction_id"],
                         user_id,

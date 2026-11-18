@@ -79,16 +79,12 @@
           <p class="empty">No spending yet this month.</p>
         {% endfor %}
 
-        {% if other_categories %}
-          <details class="edit-budget add-budget">
+        <details class="edit-budget add-budget">
             <summary>+ Add a budget for another category</summary>
             <form method="post" action="{{ url_for('set_budget') }}" class="inline">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <select name="category" aria-label="Category">
-                {% for category in other_categories %}
-                  <option value="{{ category }}">{{ category|category_label }}</option>
-                {% endfor %}
-              </select>
+              <input name="category" list="category-options" required maxlength="30"
+                     placeholder="Search or type your own" aria-label="Category" autocomplete="off">
               <label class="money-input"><span>$</span>
                 <input name="limit" type="number" min="0.01" max="1000000" step="0.01" required
                        placeholder="e.g. 200" aria-label="Monthly budget">
@@ -96,7 +92,6 @@
               <button type="submit">Save</button>
             </form>
           </details>
-        {% endif %}
       </section>
 
       {% if chart %}
@@ -135,6 +130,18 @@
               <div class="tx-main">
                 <span class="tx-name">{{ t.name }}</span>
                 <span class="tx-meta">{{ t.category|category_label }} · {{ t.date|short_date }}</span>
+                <details class="edit-budget">
+                  <summary>Change category</summary>
+                  <form method="post" action="{{ url_for('set_transaction_category', transaction_id=t.id) }}" class="inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input name="category" list="category-options" required maxlength="30"
+                           placeholder="Search or type your own" aria-label="Category for {{ t.name }}" autocomplete="off">
+                    <button type="submit">Save</button>
+                    {% if t.custom_category %}
+                      <button type="submit" name="action" value="reset" class="secondary" formnovalidate>Undo</button>
+                    {% endif %}
+                  </form>
+                </details>
               </div>
               {# Plaid uses positive for money out, negative for money in. #}
               {% if t.amount < 0 %}
@@ -150,6 +157,10 @@
       {% endif %}
     </section>
   </div>
+  {# Suggestions shown as you type in any category box. #}
+  <datalist id="category-options">
+    {% for option in category_options %}<option value="{{ option }}">{% endfor %}
+  </datalist>
 </div>
 
 <script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
