@@ -156,6 +156,20 @@ def category_label(category):
     return category  # A custom category: show it exactly as the user typed it.
 
 
+def category_options(user_id):
+    """Suggestions for the category search boxes: built-in ones plus the user's own."""
+    custom = {
+        row[0]
+        for row in get_db().execute(
+            "SELECT category FROM budgets WHERE user_id = ? UNION "
+            "SELECT custom_category FROM transactions WHERE user_id = ? AND custom_category IS NOT NULL",
+            (user_id, user_id),
+        )
+        if row[0] not in KNOWN_CATEGORIES
+    }
+    return sorted({category_label(c) for c in BUDGET_CATEGORIES} | custom)
+
+
 def parse_category(text, user_id):
     """Turn what the user typed into a category, or None if it isn't usable.
 
@@ -271,6 +285,15 @@ def init_db():
         columns = [row[1] for row in db.execute("PRAGMA table_info(transactions)")]
         if "custom_category" not in columns:
             db.execute("ALTER TABLE transactions ADD COLUMN custom_category TEXT")
+        # "Always put purchases named X in category Y", made from "Change category".
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS category_rules (
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                PRIMARY KEY (user_id, name)
+            )"""
+        )
         db.execute(
             """CREATE TABLE IF NOT EXISTS budgets (
                 user_id INTEGER NOT NULL REFERENCES users(id),
@@ -345,12 +368,6 @@ def login_required(view):
 def home():
     db = get_db()
     user_id = g.user["id"]
-    transactions = db.execute(
-        "SELECT id, date, name, amount, custom_category, "
-        "COALESCE(custom_category, category) AS category FROM transactions WHERE user_id = ? "
-        "ORDER BY date DESC",
-        (user_id,),
-    ).fetchall()
 
     month_start = date.today().replace(day=1).isoformat()
     # "Spent" counts purchases only (amount > 0). Refunds count under "money in" instead,
@@ -426,17 +443,11 @@ def home():
         budget_left=budget_left,
         current_month=date.today().strftime("%b"),
         username=g.user["username"],
-        transactions=transactions,
         total_spent=sum(row["spent"] for row in budget_rows),
         money_in=money_in,
         budget_rows=budget_rows,
         chart=chart,
-        # Suggestions for the category search boxes: built-in ones plus the user's own.
-        category_options=sorted(
-            {category_label(c) for c in BUDGET_CATEGORIES}
-            | {row["category"] for row in budget_rows if row["category"] not in KNOWN_CATEGORIES}
-            | {t["custom_category"] for t in transactions if t["custom_category"]}
-        ),
+        category_options=category_options(user_id),
     )
 
 
@@ -481,30 +492,73 @@ def set_budget():
     return redirect(url_for("home"))
 
 
+@app.route("/transactions")
+@login_required
+def transactions_page():
+    user_id = g.user["id"]
+    transactions = get_db().execute(
+        "SELECT id, date, name, amount, custom_category, "
+        "COALESCE(custom_category, category) AS category FROM transactions WHERE user_id = ? "
+        "ORDER BY date DESC",
+        (user_id,),
+    ).fetchall()
+    return render_template(
+        "transactions.html",
+        title="Transactions",
+        username=g.user["username"],
+        transactions=transactions,
+        category_options=category_options(user_id),
+    )
+
+
 @app.route("/transactions/<transaction_id>/category", methods=["POST"])
 @login_required
 def set_transaction_category(transaction_id):
+    user_id = session["user_id"]
     if request.form.get("action") == "reset":
         category = None
     else:
-        category = parse_category(request.form.get("category", ""), session["user_id"])
+        category = parse_category(request.form.get("category", ""), user_id)
         if category is None:
             flash("Type a category name (up to 30 characters).")
-            return redirect(url_for("home"))
+            return redirect(url_for("transactions_page"))
     db = get_db()
-    # "AND user_id = ?" means nobody can change someone else's transactions.
-    changed = db.execute(
-        "UPDATE transactions SET custom_category = ? WHERE id = ? AND user_id = ?",
-        (category, transaction_id, session["user_id"]),
-    ).rowcount
-    db.commit()
-    if not changed:
+    # "AND user_id = ?" means nobody can see or change someone else's transactions.
+    transaction = db.execute(
+        "SELECT name FROM transactions WHERE id = ? AND user_id = ?", (transaction_id, user_id)
+    ).fetchone()
+    if transaction is None:
         flash("Transaction not found.")
-    elif category is None:
-        flash("Category changed back to the bank's original.")
+        return redirect(url_for("transactions_page"))
+    name = transaction["name"]
+
+    if request.form.get("apply_all"):
+        # Remember the choice so future purchases with this name are sorted automatically.
+        if category is None:
+            db.execute("DELETE FROM category_rules WHERE user_id = ? AND name = ?", (user_id, name))
+        else:
+            db.execute(
+                "INSERT INTO category_rules (user_id, name, category) VALUES (?, ?, ?) "
+                "ON CONFLICT (user_id, name) DO UPDATE SET category = excluded.category",
+                (user_id, name, category),
+            )
+        changed = db.execute(
+            "UPDATE transactions SET custom_category = ? WHERE user_id = ? AND name = ?",
+            (category, user_id, name),
+        ).rowcount
     else:
-        flash(f"Moved to {category_label(category)}.")
-    return redirect(url_for("home"))
+        changed = db.execute(
+            "UPDATE transactions SET custom_category = ? WHERE id = ? AND user_id = ?",
+            (category, transaction_id, user_id),
+        ).rowcount
+    db.commit()
+
+    purchases = f"{changed} {name} purchases" if changed > 1 else name
+    if category is None:
+        flash(f"{purchases}: changed back to the bank's category.")
+    else:
+        flash(f"{purchases}: moved to {category_label(category)}.")
+    return redirect(url_for("transactions_page"))
 
 
 @app.route("/plaid/link_token", methods=["POST"])
@@ -564,7 +618,7 @@ def refresh_transactions():
     except PLAID_ERRORS:
         app.logger.exception("Plaid transactions sync failed")
         flash("Could not refresh transactions. Try again later.")
-    return redirect(url_for("home"))
+    return redirect(url_for("transactions_page"))
 
 
 def sync_transactions(user_id):
@@ -589,8 +643,10 @@ def sync_transactions(user_id):
                 category = t.get("personal_finance_category")
                 db.execute(
                     "INSERT INTO transactions "
-                    "(id, user_id, item_id, date, name, amount, category) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                    "(id, user_id, item_id, date, name, amount, category, custom_category) "
+                    # The last value applies the user's rule for this name, if they made one.
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, "
+                    "(SELECT category FROM category_rules WHERE user_id = ? AND name = ?)) "
                     # Keeps custom_category, so a moved purchase stays where the user put it.
                     "ON CONFLICT (id) DO UPDATE SET date = excluded.date, name = excluded.name, "
                     "amount = excluded.amount, category = excluded.category "
@@ -603,6 +659,8 @@ def sync_transactions(user_id):
                         t["name"],
                         t["amount"],
                         category["primary"] if category else None,
+                        user_id,
+                        t["name"],
                     ),
                 )
             for t in response["removed"]:

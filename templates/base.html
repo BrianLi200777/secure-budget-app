@@ -70,9 +70,15 @@
     }
 
     /* Dashboard */
-    main:has(.dashboard) { max-width: 1140px; margin: 0 auto 48px; }
-    main:has(.dashboard) .flash { margin-top: 16px; }
-    .topbar { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+    main.wide { max-width: 1140px; margin: 0 auto 48px; }
+    .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 0; }
+    .nav { display: flex; gap: 4px; background: #e9edf3; padding: 4px; border-radius: 11px; }
+    .nav a {
+      padding: 6px 14px; border-radius: 8px; font-size: .875rem; font-weight: 500;
+      color: var(--muted); text-decoration: none;
+    }
+    .nav a:hover { color: var(--text); }
+    .nav a.active { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
     .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; }
     .brand-mark {
       width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
@@ -122,8 +128,8 @@
     .edit-budget summary::-webkit-details-marker { display: none; }
     .add-budget { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 4px; }
     .add-budget summary { margin-top: 0; font-size: .875rem; }
-    form.inline { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
-    form.inline select { flex: 1; }
+    .inline { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+    .inline select { flex: 1; }
     .money-input { flex: 1; position: relative; margin: 0; }
     .money-input span { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--muted); }
     .money-input input { padding-left: 26px; }
@@ -139,7 +145,8 @@
     .column .amount { margin-bottom: 6px; font-variant-numeric: tabular-nums; }
     .column .label { margin-top: 8px; }
 
-    .tx-list { list-style: none; padding: 0; margin: 0 -24px -24px; max-height: 760px; overflow-y: auto; }
+    .tx-page { max-width: 760px; margin: 0 auto; }
+    .tx-list { list-style: none; padding: 0; margin: 0 -24px -24px; }
     .tx-list li { display: flex; align-items: center; gap: 12px; padding: 12px 24px; border-top: 1px solid var(--border); }
     .tx-icon {
       width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; display: grid; place-items: center;
@@ -157,6 +164,8 @@
     .tx-name { display: block; font-weight: 500; font-size: .9rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tx-meta { font-size: .78rem; color: var(--muted); }
     .tx-main .edit-budget summary { margin-top: 2px; font-size: .75rem; }
+    .apply-all { display: flex; align-items: center; gap: 6px; margin: 8px 0 0; font-size: .8rem; font-weight: 400; color: var(--muted); }
+    .apply-all input { width: auto; margin: 0; }
     .tx-amount { font-weight: 600; font-size: .9rem; font-variant-numeric: tabular-nums; }
 
     @media (max-width: 920px) { .columns { grid-template-columns: minmax(0, 1fr); } }
@@ -165,17 +174,41 @@
       .card { padding: 18px; }
       .tx-list { margin: 0 -18px -18px; }
       .tx-list li { padding: 12px 18px; }
-      form.inline { flex-wrap: wrap; }
+      .inline { flex-wrap: wrap; }
       .greeting h1 { font-size: 1.3rem; }
+      .topbar { flex-wrap: wrap; }
+      .brand-name, .user > span { display: none; }
     }
   </style>
 </head>
 <body>
-  <main>
+  <main class="{{ 'wide' if username }}">
+    {% if username %}
+      <header class="topbar">
+        <div class="brand"><span class="brand-mark">SB</span> <span class="brand-name">Secure Budget</span></div>
+        <nav class="nav">
+          <a href="{{ url_for('home') }}" class="{{ 'active' if request.endpoint == 'home' }}">Budget</a>
+          <a href="{{ url_for('transactions_page') }}" class="{{ 'active' if request.endpoint == 'transactions_page' }}">Transactions</a>
+        </nav>
+        <div class="user">
+          <span>{{ username }}</span>
+          <form method="post" action="{{ url_for('logout') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="link">Log out</button>
+          </form>
+        </div>
+      </header>
+    {% endif %}
     {% for message in get_flashed_messages() %}
       <div class="flash">{{ message }}</div>
     {% endfor %}
     {% block content %}{% endblock %}
+    {# Suggestions shown as you type in any category box. #}
+    {% if category_options %}
+      <datalist id="category-options">
+        {% for option in category_options %}<option value="{{ option }}">{% endfor %}
+      </datalist>
+    {% endif %}
   </main>
 </body>
 </html>

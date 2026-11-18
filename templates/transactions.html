@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="dashboard tx-page">
+  <section class="card">
+    <div class="card-header">
+      <h1>Transactions</h1>
+      <div class="actions">
+        <form method="post" action="{{ url_for('refresh_transactions') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button type="submit" class="secondary">Refresh</button>
+        </form>
+        <button id="connect-bank" type="button">Connect a bank</button>
+      </div>
+    </div>
+
+    {% if transactions %}
+      <ul class="tx-list">
+        {% for t in transactions %}
+          <li>
+            <span class="tx-icon cat-{{ t.category or 'OTHER' }}" aria-hidden="true">{{ (t.category|category_label)[0] }}</span>
+            <div class="tx-main">
+              <span class="tx-name">{{ t.name }}</span>
+              <span class="tx-meta">{{ t.category|category_label }} · {{ t.date|short_date }}</span>
+              <details class="edit-budget">
+                <summary>Change category</summary>
+                <form method="post" action="{{ url_for('set_transaction_category', transaction_id=t.id) }}">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <div class="inline">
+                    <input name="category" list="category-options" required maxlength="30"
+                           placeholder="Search or type your own" aria-label="Category for {{ t.name }}" autocomplete="off">
+                    <button type="submit">Save</button>
+                    {% if t.custom_category %}
+                      <button type="submit" name="action" value="reset" class="secondary" formnovalidate>Undo</button>
+                    {% endif %}
+                  </div>
+                  <label class="apply-all">
+                    <input type="checkbox" name="apply_all" value="1" checked>
+                    Do this for all “{{ t.name }}” purchases, now and in the future
+                  </label>
+                </form>
+              </details>
+            </div>
+            {# Plaid uses positive for money out, negative for money in. #}
+            {% if t.amount < 0 %}
+              <span class="tx-amount in">+{{ t.amount|money }}</span>
+            {% else %}
+              <span class="tx-amount">{{ t.amount|money }}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="empty">No transactions yet. Connect a bank to get started.</p>
+    {% endif %}
+  </section>
+</div>
+
+<script src="https://cdn.plaid.com/link/v2/stable/link-initialize.js"></script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

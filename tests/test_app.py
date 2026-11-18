@@ -172,8 +172,8 @@ def test_demo_account_has_sample_data(client):
     app_module.seed_demo_account(DEMO_PASS)
     page = login(client, username="demo", password=DEMO_PASS).data
     assert b"Welcome, demo" in page
-    assert b"Gusto Payroll" in page
     assert b"Change budget" in page
+    assert b"Gusto Payroll" in client.get("/transactions").data
 
 
 def test_demo_account_is_only_created_once(client):
@@ -236,7 +236,7 @@ def test_transactions_synced_and_shown(logged_in, fake_plaid):
     token = csrf_token(logged_in, "/")
     logged_in.post("/plaid/exchange", json={"public_token": "public-fake"},
                    headers={"X-CSRFToken": token})
-    page = logged_in.get("/").data
+    page = logged_in.get("/transactions").data
     assert b"Starbucks" in page and b"$4.33" in page
 
     logged_in.post("/plaid/sync", data={"csrf_token": token})
@@ -325,10 +325,12 @@ def set_budget(client, category, limit):
     }, follow_redirects=True)
 
 
-def move_transaction(client, transaction_id, category="", action=None):
+def move_transaction(client, transaction_id, category="", action=None, apply_all=False):
     data = {"category": category, "csrf_token": csrf_token(client, "/")}
     if action:
         data["action"] = action
+    if apply_all:
+        data["apply_all"] = "1"
     return client.post(f"/transactions/{transaction_id}/category", data=data,
                        follow_redirects=True)
 
@@ -375,8 +377,8 @@ def test_moved_purchase_counts_toward_custom_budget(logged_in):
     add_transactions([("a", 2, "Starbucks", 6.00, "FOOD_AND_DRINK"),
                       ("b", 3, "Chipotle", 12.00, "FOOD_AND_DRINK")])
     set_budget(logged_in, "Coffee", "40")
-    page = move_transaction(logged_in, "a", "Coffee").data.decode()
-    assert "Moved to Coffee" in page
+    assert "Starbucks: moved to Coffee" in move_transaction(logged_in, "a", "Coffee").data.decode()
+    page = logged_in.get("/").data.decode()
     assert re.search(r"Coffee</span>\s*<span class=\"budget-amount\">\s*<b>\$6.00</b> of \$40.00", page)
     assert re.search(r"Food and drink</span>\s*<span class=\"budget-amount\">\s*<b>\$12.00</b>", page)
 
@@ -387,6 +389,65 @@ def test_undo_puts_purchase_back_in_bank_category(logged_in):
     response = move_transaction(logged_in, "a", action="reset")
     assert b"changed back" in response.data
     assert db().execute("SELECT custom_category FROM transactions").fetchone()[0] is None
+
+
+def test_pages_have_tabs_and_transactions_live_on_their_own_page(logged_in):
+    add_transactions([("a", 2, "Starbucks", 6.00, "FOOD_AND_DRINK")])
+    budget_page = logged_in.get("/").data
+    transactions_page = logged_in.get("/transactions").data
+    assert b">Transactions</a>" in budget_page and b"Starbucks" not in budget_page
+    assert b"Starbucks" in transactions_page and b"Change category" in transactions_page
+
+
+def all_custom_categories():
+    return [row[0] for row in db().execute("SELECT custom_category FROM transactions ORDER BY id")]
+
+
+def test_apply_all_moves_every_purchase_with_that_name(logged_in):
+    add_transactions([("a", 2, "Starbucks", 6.00, "FOOD_AND_DRINK"),
+                      ("b", 3, "Starbucks", 5.00, "FOOD_AND_DRINK"),
+                      ("c", 4, "Chipotle", 12.00, "FOOD_AND_DRINK")])
+    response = move_transaction(logged_in, "a", "Coffee", apply_all=True)
+    assert b"2 Starbucks purchases: moved to Coffee" in response.data
+    assert all_custom_categories() == ["Coffee", "Coffee", None]
+
+
+def test_without_apply_all_only_one_purchase_moves(logged_in):
+    add_transactions([("a", 2, "Starbucks", 6.00, "FOOD_AND_DRINK"),
+                      ("b", 3, "Starbucks", 5.00, "FOOD_AND_DRINK")])
+    move_transaction(logged_in, "a", "Coffee")
+    assert all_custom_categories() == ["Coffee", None]
+    assert db().execute("SELECT COUNT(*) FROM category_rules").fetchone()[0] == 0
+
+
+def test_new_purchases_follow_the_rule(logged_in, fake_plaid):
+    def starbucks(tid):
+        return {"transaction_id": tid, "date": date.today(), "name": "Starbucks",
+                "amount": 4.33, "personal_finance_category": {"primary": "FOOD_AND_DRINK"}}
+    fake_plaid.pending = [starbucks("t1")]
+    token = csrf_token(logged_in, "/")
+    logged_in.post("/plaid/exchange", json={"public_token": "public-fake"},
+                   headers={"X-CSRFToken": token})
+    move_transaction(logged_in, "t1", "Coffee", apply_all=True)
+    fake_plaid.pending = [starbucks("t2")]  # A new Starbucks purchase arrives.
+    logged_in.post("/plaid/sync", headers={"X-CSRFToken": token})
+    assert all_custom_categories() == ["Coffee", "Coffee"]
+
+
+def test_undo_with_apply_all_removes_the_rule(logged_in):
+    add_transactions([("a", 2, "Starbucks", 6.00, "FOOD_AND_DRINK"),
+                      ("b", 3, "Starbucks", 5.00, "FOOD_AND_DRINK")])
+    move_transaction(logged_in, "a", "Coffee", apply_all=True)
+    move_transaction(logged_in, "a", action="reset", apply_all=True)
+    assert all_custom_categories() == [None, None]
+    assert db().execute("SELECT COUNT(*) FROM category_rules").fetchone()[0] == 0
+
+
+def test_rules_only_affect_your_own_purchases(logged_in):
+    add_transactions([("mine", 2, "Starbucks", 6.00, "FOOD_AND_DRINK")])
+    add_transactions([("theirs", 3, "Starbucks", 5.00, "FOOD_AND_DRINK")], user_id=99)
+    move_transaction(logged_in, "mine", "Coffee", apply_all=True)
+    assert all_custom_categories() == ["Coffee", None]
 
 
 def test_cannot_move_someone_elses_transaction(logged_in):
@@ -414,7 +475,7 @@ def test_users_cannot_see_each_others_data(logged_in):
     logged_in.post("/logout", data={"csrf_token": csrf_token(logged_in, "/")})
     register(logged_in, username="other")
     login(logged_in, username="other")
-    assert b"Starbucks" not in logged_in.get("/").data
+    assert b"Starbucks" not in logged_in.get("/transactions").data
 
 
 # ---------- Security hardening ----------
