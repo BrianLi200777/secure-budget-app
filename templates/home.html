@@ -7,6 +7,13 @@
   </div>
 
   <section class="stats">
+    {% if accounts %}
+      <div class="card stat">
+        <span>Cash in your accounts</span>
+        <strong>{{ '-' if cash_total < 0 }}{{ cash_total|money }}</strong>
+        <small>Checking and savings</small>
+      </div>
+    {% endif %}
     <div class="card stat">
       <span>Spent this month</span>
       <strong>{{ total_spent|money }}</strong>
@@ -82,6 +89,7 @@
           </details>
       </section>
 
+    <div class="stack">
       {% if chart %}
         <section class="card">
           <div class="card-header"><h2>Spending by month</h2></div>
@@ -96,6 +104,27 @@
           </div>
         </section>
       {% endif %}
+
+      {% if accounts %}
+        <section class="card">
+          <div class="card-header"><h2>Accounts</h2></div>
+          <ul class="account-list">
+            {% for a in accounts %}
+              <li>
+                <span>{{ a.name }}</span>
+                {% if a.balance is none %}
+                  <span class="muted">Not available</span>
+                {% elif a.type in ("credit", "loan") %}
+                  <span class="owed">{{ a.balance|money }} owed</span>
+                {% else %}
+                  <b>{{ '-' if a.balance < 0 }}{{ a.balance|money }}</b>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endif %}
+    </div>
   </div>
 </div>
 {% endblock %}

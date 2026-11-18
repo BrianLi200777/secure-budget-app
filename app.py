@@ -115,6 +115,12 @@ DEMO_TRANSACTIONS = [
     (130, "Rent", 900.00, "RENT_AND_UTILITIES"),
     (150, "AMC Theatres", 28.00, "ENTERTAINMENT"),
 ]
+# (name, type, balance). For credit cards and loans, the balance is what's owed, like Plaid.
+DEMO_ACCOUNTS = [
+    ("Everyday Checking", "depository", 1842.67),
+    ("High-Yield Savings", "depository", 6250.00),
+    ("Student Credit Card", "credit", 386.20),
+]
 DEMO_BUDGETS = {
     "FOOD_AND_DRINK": 300, "GENERAL_MERCHANDISE": 100,
     "TRANSPORTATION": 150, "ENTERTAINMENT": 60,
@@ -285,6 +291,17 @@ def init_db():
         columns = [row[1] for row in db.execute("PRAGMA table_info(transactions)")]
         if "custom_category" not in columns:
             db.execute("ALTER TABLE transactions ADD COLUMN custom_category TEXT")
+        # Bank account balances, saved on each sync. Account numbers aren't stored.
+        db.execute(
+            """CREATE TABLE IF NOT EXISTS accounts (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL REFERENCES users(id),
+                item_id INTEGER NOT NULL REFERENCES items(id),
+                name TEXT NOT NULL,
+                type TEXT NOT NULL,
+                balance REAL
+            )"""
+        )
         # "Always put purchases named X in category Y", made from "Change category".
         db.execute(
             """CREATE TABLE IF NOT EXISTS category_rules (
@@ -329,6 +346,11 @@ def seed_demo_account(password):
         db.executemany(
             "INSERT INTO budgets (user_id, category, monthly_limit) VALUES (?, ?, ?)",
             [(user_id, category, limit) for category, limit in DEMO_BUDGETS.items()],
+        )
+        db.executemany(
+            "INSERT INTO accounts (id, user_id, item_id, name, type, balance) VALUES (?, ?, ?, ?, ?, ?)",
+            [(f"demo-{user_id}-account-{n}", user_id, item_id, name, kind, balance)
+             for n, (name, kind, balance) in enumerate(DEMO_ACCOUNTS)],
         )
 
 
@@ -432,6 +454,13 @@ def home():
         for row in reversed(monthly)
     ]
 
+    # Credit cards and loans list what's owed, so they're shown apart from cash.
+    accounts = db.execute(
+        "SELECT name, type, balance FROM accounts WHERE user_id = ? "
+        "ORDER BY type = 'depository' DESC, balance DESC",
+        (user_id,),
+    ).fetchall()
+
     budgeted = [row for row in budget_rows if row["limit"]]
     budget_total = sum(row["limit"] for row in budgeted)
     budget_left = budget_total - sum(row["spent"] for row in budgeted)
@@ -441,6 +470,8 @@ def home():
         title="Dashboard",
         budget_total=budget_total,
         budget_left=budget_left,
+        accounts=accounts,
+        cash_total=sum(a["balance"] or 0 for a in accounts if a["type"] == "depository"),
         current_month=date.today().strftime("%b"),
         username=g.user["username"],
         total_spent=sum(row["spent"] for row in budget_rows),
@@ -638,6 +669,16 @@ def sync_transactions(user_id):
             response = plaid_client.transactions_sync(
                 TransactionsSyncRequest(**request_args)
             )
+
+            for account in response.get("accounts", []):
+                db.execute(
+                    "INSERT INTO accounts (id, user_id, item_id, name, type, balance) "
+                    "VALUES (?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT (id) DO UPDATE SET name = excluded.name, type = excluded.type, "
+                    "balance = excluded.balance WHERE accounts.user_id = excluded.user_id",
+                    (account["account_id"], user_id, item["id"], account["name"],
+                     str(account["type"]), account["balances"]["current"]),
+                )
 
             for t in response["added"] + response["modified"]:
                 category = t.get("personal_finance_category")

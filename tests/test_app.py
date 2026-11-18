@@ -24,6 +24,7 @@ class FakePlaid:
 
     def __init__(self):
         self.pending = []
+        self.accounts = []
 
     def link_token_create(self, request):
         return {"link_token": "link-sandbox-fake"}
@@ -33,7 +34,7 @@ class FakePlaid:
 
     def transactions_sync(self, request):
         added, self.pending = self.pending, []
-        return {"added": added, "modified": [], "removed": [],
+        return {"added": added, "modified": [], "removed": [], "accounts": self.accounts,
                 "next_cursor": "cursor-1", "has_more": False}
 
 
@@ -173,6 +174,7 @@ def test_demo_account_has_sample_data(client):
     page = login(client, username="demo", password=DEMO_PASS).data
     assert b"Welcome, demo" in page
     assert b"Change budget" in page
+    assert b"Everyday Checking" in page and b"Cash in your accounts" in page
     assert b"Gusto Payroll" in client.get("/transactions").data
 
 
@@ -241,6 +243,47 @@ def test_transactions_synced_and_shown(logged_in, fake_plaid):
 
     logged_in.post("/plaid/sync", data={"csrf_token": token})
     assert db().execute("SELECT COUNT(*) FROM transactions").fetchone()[0] == 1
+
+
+def plaid_account(account_id, name, kind, balance):
+    return {"account_id": account_id, "name": name, "type": kind, "balances": {"current": balance}}
+
+
+def connect_bank(client):
+    client.post("/plaid/exchange", json={"public_token": "public-fake"},
+                headers={"X-CSRFToken": csrf_token(client, "/")})
+
+
+def test_balances_shown_with_cash_total(logged_in, fake_plaid):
+    fake_plaid.accounts = [plaid_account("a1", "Plaid Checking", "depository", 110.0),
+                           plaid_account("a2", "Plaid Saving", "depository", 210.0),
+                           plaid_account("a3", "Plaid Credit Card", "credit", 410.0)]
+    connect_bank(logged_in)
+    page = logged_in.get("/").data.decode()
+    cash = re.search(r"Cash in your accounts</span>\s*<strong>([^<]+)", page).group(1)
+    assert cash == "$320.00"  # Checking + savings. The card's balance is money owed.
+    assert "$410.00 owed" in page
+
+
+def test_refresh_updates_balance_without_duplicates(logged_in, fake_plaid):
+    fake_plaid.accounts = [plaid_account("a1", "Plaid Checking", "depository", 110.0)]
+    connect_bank(logged_in)
+    fake_plaid.accounts = [plaid_account("a1", "Plaid Checking", "depository", 95.5)]
+    logged_in.post("/plaid/sync", headers={"X-CSRFToken": csrf_token(logged_in, "/")})
+    assert db().execute("SELECT balance FROM accounts").fetchall() == [(95.5,)]
+
+
+def test_no_cash_card_without_a_bank(logged_in):
+    assert b"Cash in your accounts" not in logged_in.get("/").data
+
+
+def test_users_cannot_see_each_others_balances(logged_in, fake_plaid):
+    fake_plaid.accounts = [plaid_account("a1", "Plaid Checking", "depository", 110.0)]
+    connect_bank(logged_in)
+    logged_in.post("/logout", data={"csrf_token": csrf_token(logged_in, "/")})
+    register(logged_in, username="other")
+    login(logged_in, username="other")
+    assert b"Plaid Checking" not in logged_in.get("/").data
 
 
 def test_plaid_error_shows_generic_message(logged_in, fake_plaid, monkeypatch):
